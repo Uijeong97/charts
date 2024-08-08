@@ -90,9 +90,9 @@ extraDeploy:
         "helm.sh/hook": post-install
     spec:
       interval: 5m
-      url: https://github.com/javsalgar/podinfo
+      url: https://github.com/mdhont/podinfo
       ref:
-        branch: master
+        branch: '{{ ternary "openshift" "master" (.Capabilities.APIVersions.Has "security.openshift.io/v1") }}'
   - apiVersion: kustomize.toolkit.fluxcd.io/v1
     kind: Kustomization
     metadata:
@@ -122,7 +122,7 @@ extraDeploy:
       url: https://github.com/bitnami/charts
       ref:
         branch: main
-  - apiVersion: helm.toolkit.fluxcd.io/v2beta1
+  - apiVersion: helm.toolkit.fluxcd.io/v2beta2
     kind: HelmRelease
     metadata:
       name: vib-dokuwiki
@@ -140,12 +140,12 @@ extraDeploy:
             namespace: '{{ include "common.names.namespace" . }}'
           interval: 1m
       values:
+        global:
+          compatibility:
+            openshift:
+              adaptSecurityContext: auto
         fullnameOverride: vib-dokuwiki
         persistence:
-          enabled: false
-        podSecurityContext:
-          enabled: false
-        containerSecurityContext:
           enabled: false
   # This is for image-notification-controller. We will use the metrics to ensure that it is consumed
   # and therefore RBAC is correct. The values do not need to be correct

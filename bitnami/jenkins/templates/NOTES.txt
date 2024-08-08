@@ -45,3 +45,5 @@ APP VERSION: {{ .Chart.AppVersion }}
   echo Password: $(kubectl get secret --namespace {{ include "common.names.namespace" . }} {{ template "common.names.fullname" . }} -o jsonpath="{.data.jenkins-password}" | base64 -d)
 
 {{- include "jenkins.checkRollingTags" . }}
+{{- include "common.warnings.resources" (dict "sections" (list "agent" "" "tls" "volumePermissions") "context" $) }}
+{{- include "common.warnings.modifiedImages" (dict "images" (list .Values.image .Values.agent.image .Values.volumePermissions.image) "context" $) }}

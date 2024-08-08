@@ -1,5 +1,5 @@
 {{/*
-Copyright VMware, Inc.
+Copyright Broadcom, Inc. All Rights Reserved.
 SPDX-License-Identifier: APACHE-2.0
 */}}
 
@@ -45,7 +45,85 @@ Return the proper sysctl image name
     runAsUser: 0
   {{- if .Values.sysctlImage.resources }}
   resources: {{- toYaml .Values.sysctlImage.resources | nindent 12 }}
+  {{- else if ne .Values.sysctlImage.resourcesPreset "none" }}
+  resources: {{- include "common.resources.preset" (dict "type" .Values.sysctlImage.resourcesPreset) | nindent 12 }}
   {{- end }}
+{{- end -}}
+
+{{/*
+Return the copy plugins init container definition
+*/}}
+{{- define "opensearch.copy-default-plugins.initContainer" -}}
+{{- $block := index .context.Values .component }}
+- name: copy-default-plugins
+  image: {{ include "opensearch.image" .context }}
+  imagePullPolicy: {{ .context.Values.image.pullPolicy | quote }}
+  {{- if $block.containerSecurityContext.enabled }}
+  securityContext: {{- include "common.compatibility.renderSecurityContext" (dict "secContext" $block.containerSecurityContext "context" .context) | nindent 12 }}
+  {{- end }}
+  {{- if $block.resources }}
+  resources: {{- toYaml $block.resources | nindent 12 }}
+  {{- else if ne $block.resourcesPreset "none" }}
+  resources: {{- include "common.resources.preset" (dict "type" $block.resourcesPreset) | nindent 12 }}
+  {{- end }}
+  command:
+    - /bin/bash
+  args:
+    - -ec
+    - |
+        #!/bin/bash
+
+        . /opt/bitnami/scripts/libfs.sh
+        . /opt/bitnami/scripts/opensearch-env.sh
+
+        if ! is_dir_empty "$DB_DEFAULT_PLUGINS_DIR"; then
+            cp -nr "$DB_DEFAULT_PLUGINS_DIR"/* /plugins
+        fi
+  volumeMounts:
+    - name: empty-dir
+      mountPath: /plugins
+      subPath: app-plugins-dir
+{{- end -}}
+
+{{/*
+Return the copy plugins init container definition
+*/}}
+{{- define "opensearch.dashboards.copy-default-plugins.initContainer" -}}
+- name: copy-default-plugins
+  image: {{ include "opensearch.dashboards.image" . }}
+  imagePullPolicy: {{ .Values.dashboards.image.pullPolicy | quote }}
+  {{- if .Values.dashboards.containerSecurityContext.enabled }}
+  securityContext: {{- include "common.compatibility.renderSecurityContext" (dict "secContext" .Values.dashboards.containerSecurityContext "context" $) | nindent 12 }}
+  {{- end }}
+  {{- if .Values.dashboards.resources }}
+  resources: {{- toYaml .Values.dashboards.resources | nindent 12 }}
+  {{- else if ne .Values.dashboards.resourcesPreset "none" }}
+  resources: {{- include "common.resources.preset" (dict "type" .Values.dashboards.resourcesPreset) | nindent 12 }}
+  {{- end }}
+  command:
+    - /bin/bash
+  args:
+    - -ec
+    - |
+        #!/bin/bash
+
+        . /opt/bitnami/scripts/libfs.sh
+        . /opt/bitnami/scripts/opensearch-dashboards-env.sh
+
+        if ! is_dir_empty "$SERVER_DEFAULT_PLUGINS_DIR"; then
+            cp -nr "$SERVER_DEFAULT_PLUGINS_DIR"/* /plugins
+        fi
+  volumeMounts:
+    - name: empty-dir
+      mountPath: /plugins
+      subPath: app-plugins-dir
+{{- end -}}
+
+{{/*
+Set Elasticsearch PVC.
+*/}}
+{{- define "opensearch.dashboards.pvc" -}}
+{{- .Values.dashboards.persistence.existingClaim | default (include "opensearch.dashboards.fullname" .) -}}
 {{- end -}}
 
 {{/*
@@ -59,7 +137,6 @@ Return the proper image name (for the init container volume-permissions image)
 {{/*
 Name for the Opensearch service
 We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
-Required for the Kibana subchart to find Opensearch service.
 */}}
 {{- define "opensearch.service.name" -}}
     {{- printf "%s" ( include "common.names.fullname" . )  | trunc 63 | trimSuffix "-" -}}
@@ -67,7 +144,6 @@ Required for the Kibana subchart to find Opensearch service.
 
 {{/*
 Port number for the Opensearch service REST API port
-Required for the Kibana subchart to find Opensearch service.
 */}}
 {{- define "opensearch.service.ports.restAPI" -}}
 {{- printf "%d" (int .Values.service.ports.restAPI) -}}
@@ -311,63 +387,95 @@ Create the name of the ingest service account to use
 {{- end -}}
 
 {{/*
-Return the opensearch TLS credentials secret for master nodes.
+Return the opensearch TLS credentials secret for typed nodes.
 */}}
-{{- define "opensearch.master.tlsSecretName" -}}
-{{- $secretName := .Values.security.tls.master.existingSecret -}}
+{{- define "opensearch.node.tlsSecretName" -}}
+{{- $secretName := index .context.Values.security.tls .nodeRole "existingSecret" -}}
 {{- if $secretName -}}
-    {{- printf "%s" (tpl $secretName $) -}}
+    {{- printf "%s" (tpl $secretName .context) -}}
 {{- else -}}
-    {{- printf "%s-crt" (include "opensearch.master.fullname" .) -}}
+    {{- printf "%s-crt" (include (printf "opensearch.%s.fullname" .nodeRole) .context) -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Return the opensearch TLS credentials secret items for typed nodes.
+*/}}
+{{- define "opensearch.node.tlsSecretItems" -}}
+{{- $items := list }}
+{{- $items = append $items (dict "key" (include "opensearch.node.tlsSecretCertKey" (dict "nodeRole" .nodeRole "context" .context)) "path" "tls.crt") }}
+{{- $items = append $items (dict "key" (include "opensearch.node.tlsSecretKeyKey" (dict "nodeRole" .nodeRole "context" .context)) "path" "tls.key") }}
+{{- $items = append $items (dict "key" (include "opensearch.node.tlsSecretCAKey" (dict "nodeRole" .nodeRole "context" .context)) "path" "ca.crt") }}
+{{ $items | toYaml }}
+{{- end -}}
+
+{{/*
+Return the opensearch TLS credentials secret key of the certificate for typed nodes.
+*/}}
+{{- define "opensearch.node.tlsSecretCertKey" -}}
+{{- include "opensearch.tlsSecretKey" (dict "type" .nodeRole "secretKey" "certKey" "defaultKey" "tls.crt" "context" .context) -}}
+{{- end -}}
+
+{{/*
+Return the opensearch TLS credentials secret key of the certificates key for typed nodes.
+*/}}
+{{- define "opensearch.node.tlsSecretKeyKey" -}}
+{{- include "opensearch.tlsSecretKey" (dict "type" .nodeRole "secretKey" "keyKey" "defaultKey" "tls.key" "context" .context) -}}
+{{- end -}}
+
+{{/*
+Return the opensearch TLS credentials secret key of the ca certificate for typed nodes.
+*/}}
+{{- define "opensearch.node.tlsSecretCAKey" -}}
+{{- include "opensearch.tlsSecretKey" (dict "type" .nodeRole "secretKey" "caKey" "defaultKey" "ca.crt" "context" .context) -}}
 {{- end -}}
 
 {{/*
 Return the opensearch admin TLS credentials secret for all nodes.
 */}}
 {{- define "opensearch.admin.tlsSecretName" -}}
-{{- $secretName := .Values.security.tls.admin.existingSecret -}}
+{{- $secretName := .context.Values.security.tls.admin.existingSecret -}}
 {{- if $secretName -}}
-    {{- printf "%s" (tpl $secretName $) -}}
+    {{- printf "%s" (tpl $secretName .context) -}}
 {{- else -}}
-    {{- printf "%s-admin-crt" (include "common.names.fullname" .) -}}
+    {{- printf "%s-admin-crt" (include "common.names.fullname" .context) -}}
 {{- end -}}
 {{- end -}}
 
 {{/*
-Return the opensearch TLS credentials secret for coordinating nodes.
+Return the opensearch TLS credentials secret items for all nodes.
 */}}
-{{- define "opensearch.coordinating.tlsSecretName" -}}
-{{- $secretName := .Values.security.tls.coordinating.existingSecret -}}
-{{- if $secretName -}}
-    {{- printf "%s" (tpl $secretName $) -}}
-{{- else -}}
-    {{- printf "%s-crt" (include "opensearch.coordinating.fullname" .) -}}
-{{- end -}}
+{{- define "opensearch.admin.tlsSecretItems" -}}
+{{- $items := list }}
+{{- $items = append $items (dict "key" (include "opensearch.admin.tlsSecretCertKey" (dict "context" .context)) "path" "admin.crt") }}
+{{- $items = append $items (dict "key" (include "opensearch.admin.tlsSecretKeyKey" (dict "context" .context)) "path" "admin.key") }}
+{{ $items | toYaml }}
 {{- end -}}
 
 {{/*
-Return the opensearch TLS credentials secret for data nodes.
+Return the opensearch TLS credentials secret key of the certificate for all nodes.
 */}}
-{{- define "opensearch.data.tlsSecretName" -}}
-{{- $secretName := .Values.security.tls.data.existingSecret -}}
-{{- if $secretName -}}
-    {{- printf "%s" (tpl $secretName $) -}}
-{{- else -}}
-    {{- printf "%s-crt" (include "opensearch.data.fullname" .) -}}
-{{- end -}}
+{{- define "opensearch.admin.tlsSecretCertKey" -}}
+{{- include "opensearch.tlsSecretKey" (dict "type" "admin" "secretKey" "certKey" "defaultKey" "admin.crt" "context" .context) -}}
 {{- end -}}
 
 {{/*
-Return the opensearch TLS credentials secret for ingest nodes.
+Return the opensearch TLS credentials secret key of the certificates key for all nodes.
 */}}
-{{- define "opensearch.ingest.tlsSecretName" -}}
-{{- $secretName := .Values.security.tls.ingest.existingSecret -}}
-{{- if $secretName -}}
-    {{- printf "%s" (tpl $secretName $) -}}
-{{- else -}}
-    {{- printf "%s-crt" (include "opensearch.ingest.fullname" .) -}}
+{{- define "opensearch.admin.tlsSecretKeyKey" -}}
+{{- include "opensearch.tlsSecretKey" (dict "type" "admin" "secretKey" "keyKey" "defaultKey" "admin.key" "context" .context) -}}
 {{- end -}}
+
+{{/*
+Return the opensearch TLS credentials secret key of the given type.
+*/}}
+{{- define "opensearch.tlsSecretKey" -}}
+{{- $secretConfig := index .context.Values.security.tls .type -}}
+{{- if $secretConfig.existingSecret }}
+{{- print (index $secretConfig .secretKey | default .defaultKey) }}
+{{- else }}
+{{- print .defaultKey }}
+{{- end }}
 {{- end -}}
 
 {{/*
@@ -392,7 +500,11 @@ Return true if an authentication credentials secret object should be created
 Return the Opensearch authentication credentials secret name
 */}}
 {{- define "opensearch.secretName" -}}
-{{- default (include "common.names.fullname" .) .Values.security.existingSecret  -}}
+{{- if .Values.security.existingSecret -}}
+    {{- printf "%s" (tpl .Values.security.existingSecret $) -}}
+{{- else -}}
+    {{- printf "%s" (include "common.names.fullname" .) -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -408,7 +520,11 @@ Return true if a TLS password secret object should be created
 Return the Opensearch TLS password secret name
 */}}
 {{- define "opensearch.tlsPasswordsSecret" -}}
-{{- default (printf "%s-tls-pass" (include "common.names.fullname" .)) .Values.security.tls.passwordsSecret -}}
+{{- if .Values.security.tls.passwordsSecret -}}
+    {{- printf "%s" (tpl .Values.security.tls.passwordsSecret $) -}}
+{{- else -}}
+    {{- printf "%s-tls-pass" (include "common.names.fullname" .) -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

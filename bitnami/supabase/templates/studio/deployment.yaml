@@ -1,5 +1,5 @@
 {{- /*
-Copyright VMware, Inc.
+Copyright Broadcom, Inc. All Rights Reserved.
 SPDX-License-Identifier: APACHE-2.0
 */}}
 
@@ -36,10 +36,12 @@ spec:
         {{- end }}
         checksum/jwt-secret: {{ include (print $.Template.BasePath "/jwt-secret.yaml") . | sha256sum }}
       labels: {{- include "common.labels.standard" ( dict "customLabels" $podLabels "context" $ ) | nindent 8 }}
+        app.kubernetes.io/part-of: supabase
         app.kubernetes.io/component: studio
     spec:
       serviceAccountName: {{ template "supabase.serviceAccountName" . }}
       {{- include "supabase.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: {{ .Values.studio.automountServiceAccountToken }}
       {{- if .Values.studio.hostAliases }}
       hostAliases: {{- include "common.tplvalues.render" (dict "value" .Values.studio.hostAliases "context" $) | nindent 8 }}
       {{- end }}
@@ -67,7 +69,7 @@ spec:
       topologySpreadConstraints: {{- include "common.tplvalues.render" (dict "value" .Values.studio.topologySpreadConstraints "context" .) | nindent 8 }}
       {{- end }}
       {{- if .Values.studio.podSecurityContext.enabled }}
-      securityContext: {{- omit .Values.studio.podSecurityContext "enabled" | toYaml | nindent 8 }}
+      securityContext: {{- include "common.compatibility.renderSecurityContext" (dict "secContext" .Values.studio.podSecurityContext "context" $) | nindent 8 }}
       {{- end }}
       {{- if .Values.studio.terminationGracePeriodSeconds }}
       terminationGracePeriodSeconds: {{ .Values.studio.terminationGracePeriodSeconds }}
@@ -84,7 +86,7 @@ spec:
           image: {{ template "supabase.studio.image" . }}
           imagePullPolicy: {{ .Values.studio.image.pullPolicy }}
           {{- if .Values.studio.containerSecurityContext.enabled }}
-          securityContext: {{- omit .Values.studio.containerSecurityContext "enabled" | toYaml | nindent 12 }}
+          securityContext: {{- include "common.compatibility.renderSecurityContext" (dict "secContext" .Values.studio.containerSecurityContext "context" $) | nindent 12 }}
           {{- end }}
           {{- if .Values.diagnosticMode.enabled }}
           command: {{- include "common.tplvalues.render" (dict "value" .Values.diagnosticMode.command "context" $) | nindent 12 }}
@@ -132,18 +134,19 @@ spec:
             {{- end }}
           {{- if .Values.studio.resources }}
           resources: {{- toYaml .Values.studio.resources | nindent 12 }}
+          {{- else if ne .Values.studio.resourcesPreset "none" }}
+          resources: {{- include "common.resources.preset" (dict "type" .Values.studio.resourcesPreset) | nindent 12 }}
           {{- end }}
           ports:
-            - name: http
+            - name: http-studio
               containerPort: {{ .Values.studio.containerPorts.http }}
           {{- if not .Values.diagnosticMode.enabled }}
           {{- if .Values.studio.customLivenessProbe }}
           livenessProbe: {{- include "common.tplvalues.render" (dict "value" .Values.studio.customLivenessProbe "context" $) | nindent 12 }}
           {{- else if .Values.studio.livenessProbe.enabled }}
           livenessProbe: {{- include "common.tplvalues.render" (dict "value" (omit .Values.studio.livenessProbe "enabled") "context" $) | nindent 12 }}
-            httpGet:
-              path: /
-              port: http
+            tcpSocket:
+              port: http-studio
           {{- end }}
           {{- if .Values.studio.customReadinessProbe }}
           readinessProbe: {{- include "common.tplvalues.render" (dict "value" .Values.studio.customReadinessProbe "context" $) | nindent 12 }}
@@ -151,7 +154,7 @@ spec:
           readinessProbe: {{- include "common.tplvalues.render" (dict "value" (omit .Values.studio.readinessProbe "enabled") "context" $) | nindent 12 }}
             httpGet:
               path: /
-              port: http
+              port: http-studio
           {{- end }}
           {{- if .Values.studio.customStartupProbe }}
           startupProbe: {{- include "common.tplvalues.render" (dict "value" .Values.studio.customStartupProbe "context" $) | nindent 12 }}
@@ -159,13 +162,16 @@ spec:
           startupProbe: {{- include "common.tplvalues.render" (dict "value" (omit .Values.studio.startupProbe "enabled") "context" $) | nindent 12 }}
             httpGet:
               path: /
-              port: http
+              port: http-studio
           {{- end }}
           {{- end }}
           {{- if .Values.studio.lifecycleHooks }}
           lifecycle: {{- include "common.tplvalues.render" (dict "value" .Values.studio.lifecycleHooks "context" $) | nindent 12 }}
           {{- end }}
           volumeMounts:
+            - name: empty-dir
+              mountPath: /tmp
+              subPath: tmp-dir
           {{- if .Values.studio.extraVolumeMounts }}
           {{- include "common.tplvalues.render" (dict "value" .Values.studio.extraVolumeMounts "context" $) | nindent 12 }}
           {{- end }}
@@ -173,6 +179,8 @@ spec:
         {{- include "common.tplvalues.render" ( dict "value" .Values.studio.sidecars "context" $) | nindent 8 }}
         {{- end }}
       volumes:
+        - name: empty-dir
+          emptyDir: {}
         {{- if .Values.studio.extraVolumes }}
         {{- include "common.tplvalues.render" (dict "value" .Values.studio.extraVolumes "context" $) | nindent 8 }}
         {{- end }}

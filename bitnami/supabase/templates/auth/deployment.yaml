@@ -1,5 +1,5 @@
 {{- /*
-Copyright VMware, Inc.
+Copyright Broadcom, Inc. All Rights Reserved.
 SPDX-License-Identifier: APACHE-2.0
 */}}
 
@@ -38,10 +38,12 @@ spec:
         {{- end }}
         checksum/jwt-secret: {{ include (print $.Template.BasePath "/jwt-secret.yaml") . | sha256sum }}
       labels: {{- include "common.labels.standard" ( dict "customLabels" $podLabels "context" $ ) | nindent 8 }}
+        app.kubernetes.io/part-of: supabase
         app.kubernetes.io/component: auth
     spec:
       serviceAccountName: {{ template "supabase.serviceAccountName" . }}
       {{- include "supabase.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: {{ .Values.auth.automountServiceAccountToken }}
       {{- if .Values.auth.hostAliases }}
       hostAliases: {{- include "common.tplvalues.render" (dict "value" .Values.auth.hostAliases "context" $) | nindent 8 }}
       {{- end }}
@@ -69,7 +71,7 @@ spec:
       topologySpreadConstraints: {{- include "common.tplvalues.render" (dict "value" .Values.auth.topologySpreadConstraints "context" .) | nindent 8 }}
       {{- end }}
       {{- if .Values.auth.podSecurityContext.enabled }}
-      securityContext: {{- omit .Values.auth.podSecurityContext "enabled" | toYaml | nindent 8 }}
+      securityContext: {{- include "common.compatibility.renderSecurityContext" (dict "secContext" .Values.auth.podSecurityContext "context" $) | nindent 8 }}
       {{- end }}
       {{- if .Values.auth.terminationGracePeriodSeconds }}
       terminationGracePeriodSeconds: {{ .Values.auth.terminationGracePeriodSeconds }}
@@ -86,7 +88,7 @@ spec:
           image: {{ template "supabase.auth.image" . }}
           imagePullPolicy: {{ .Values.auth.image.pullPolicy }}
           {{- if .Values.auth.containerSecurityContext.enabled }}
-          securityContext: {{- omit .Values.auth.containerSecurityContext "enabled" | toYaml | nindent 12 }}
+          securityContext: {{- include "common.compatibility.renderSecurityContext" (dict "secContext" .Values.auth.containerSecurityContext "context" $) | nindent 12 }}
           {{- end }}
           {{- if .Values.diagnosticMode.enabled }}
           command: {{- include "common.tplvalues.render" (dict "value" .Values.diagnosticMode.command "context" $) | nindent 12 }}
@@ -146,6 +148,8 @@ spec:
             {{- end }}
           {{- if .Values.auth.resources }}
           resources: {{- toYaml .Values.auth.resources | nindent 12 }}
+          {{- else if ne .Values.auth.resourcesPreset "none" }}
+          resources: {{- include "common.resources.preset" (dict "type" .Values.auth.resourcesPreset) | nindent 12 }}
           {{- end }}
           ports:
             - name: http
@@ -155,8 +159,7 @@ spec:
           livenessProbe: {{- include "common.tplvalues.render" (dict "value" .Values.auth.customLivenessProbe "context" $) | nindent 12 }}
           {{- else if .Values.auth.livenessProbe.enabled }}
           livenessProbe: {{- include "common.tplvalues.render" (dict "value" (omit .Values.auth.livenessProbe "enabled") "context" $) | nindent 12 }}
-            httpGet:
-              path: /health
+            tcpSocket:
               port: http
           {{- end }}
           {{- if .Values.auth.customReadinessProbe }}
@@ -179,6 +182,10 @@ spec:
           {{- if .Values.auth.lifecycleHooks }}
           lifecycle: {{- include "common.tplvalues.render" (dict "value" .Values.auth.lifecycleHooks "context" $) | nindent 12 }}
           {{- end }}
+          volumeMounts:
+            - name: empty-dir
+              mountPath: /tmp
+              subPath: tmp-dir
           {{- if .Values.auth.extraVolumeMounts }}
           {{- include "common.tplvalues.render" (dict "value" .Values.auth.extraVolumeMounts "context" $) | nindent 12 }}
           {{- end }}
@@ -186,6 +193,8 @@ spec:
         {{- include "common.tplvalues.render" ( dict "value" .Values.auth.sidecars "context" $) | nindent 8 }}
         {{- end }}
       volumes:
+        - name: empty-dir
+          emptyDir: {}
         {{- if .Values.auth.extraVolumes }}
         {{- include "common.tplvalues.render" (dict "value" .Values.auth.extraVolumes "context" $) | nindent 8 }}
         {{- end }}
